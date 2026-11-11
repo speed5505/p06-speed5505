@@ -298,6 +298,12 @@ class Transformer:
             )
             crop_height = source_height
 
+        # A crop of zero pixels on a side (possible when the target aspect
+        # ratio is far from the source's) would blank the image out. Keep at
+        # least one pixel so every request returns a real picture.
+        crop_width = max(1, crop_width)
+        crop_height = max(1, crop_height)
+
         crop_left = int(
             round(
                 min(
@@ -386,20 +392,32 @@ class Transformer:
         ):
             return
 
+        # A zero target dimension means the request gave only one axis and
+        # the proportional value rounded down to nothing (an extreme aspect
+        # ratio). Treat it as the smallest real size so the ratio comparison
+        # below cannot divide by zero.
+        target_width = self.target_width or 1
+        target_height = self.target_height or 1
+
         # add 1e-5 to get .5 rounding up in Python3 as it was in Python2
         if (
-            source_width / self.target_width * sign
-            >= source_height / self.target_height * sign
+            source_width / target_width * sign
+            >= source_height / target_height * sign
         ):
             resize_height = round(
-                source_height * self.target_width / source_width + 1e-5
+                source_height * target_width / source_width + 1e-5
             )
-            resize_width = self.target_width
+            resize_width = target_width
         else:
-            resize_height = self.target_height
+            resize_height = target_height
             resize_width = round(
-                source_width * self.target_height / source_height + 1e-5
+                source_width * target_height / source_height + 1e-5
             )
+
+        # Rounding the proportional side of an extreme aspect ratio can
+        # reach zero; a zero-pixel side makes the resize fail. Keep one.
+        resize_width = max(1, resize_width)
+        resize_height = max(1, resize_height)
 
         # ensure that filter should work on the real image size
         # and not on the request size which might be smaller than the
