@@ -276,7 +276,22 @@ class Engine(BaseEngine):
                     if pillow_features.check("libimagequant")
                     else None
                 )
+                alpha = None
+                if (
+                    requested_extension == ".gif"
+                    and self.image.mode == "RGBA"
+                ):
+                    alpha = self.image.getchannel("A")
                 self.image = self.image.quantize(method=quantize_method)
+                if alpha is not None:
+                    # GIF marks transparency with a single palette index,
+                    # which quantize() does not carry over from the alpha.
+                    transparent = alpha.point([255] + [0] * 255)
+                    if transparent.getbbox() is not None:
+                        counts = self.image.histogram(mask=transparent)
+                        self.image.info["transparency"] = counts.index(
+                            max(counts)
+                        )
 
         ext = requested_extension or self.get_default_extension()
 
