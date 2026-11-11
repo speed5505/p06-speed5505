@@ -10,61 +10,47 @@ from io import BytesIO
 from os.path import abspath, dirname, join
 
 from PIL import Image
+from tornado.testing import gen_test
 
+from tests.handlers.test_base_handler import BaseImagingTestCase
 from thumbor.config import Config
-from thumbor.context import Context
-from thumbor.engines.pil import Engine
+from thumbor.context import Context, ServerParameters
+from thumbor.importer import Importer
 
-IMAGES_PATH = abspath(join(dirname(__file__), "../course/images"))
-SIZE = (240, 160)
-
-
-def load_source():
-    with open(join(IMAGES_PATH, "sticker.gif"), "rb") as image_file:
-        return image_file.read()
+COURSE_IMAGES = abspath(join(dirname(__file__), "../course/images"))
 
 
-def resize_to_gif():
-    config = Config(
-        ENGINE="thumbor.engines.pil",
-        ALLOW_ANIMATED_GIFS=False,
-        PILLOW_PRESERVE_INDEXED_MODE=True,
-    )
-    engine = Engine(Context(config=config))
-    engine.load(load_source(), ".gif")
-    assert engine.original_mode == "P"
-    engine.resize(*SIZE)
-    return Image.open(BytesIO(engine.read(".gif")))
+class ResizedStickerGifKeepsTransparencyTestCase(BaseImagingTestCase):
+    def get_context(self):
+        cfg = Config(SECURITY_KEY="ACME-SEC")
+        cfg.LOADER = "thumbor.loaders.file_loader"
+        cfg.FILE_LOADER_ROOT_PATH = COURSE_IMAGES
+        cfg.STORAGE = "thumbor.storages.no_storage"
+        cfg.ALLOW_UNSAFE_URL = True
 
+        importer = Importer(cfg)
+        importer.import_modules()
+        server = ServerParameters(
+            8889, "localhost", "thumbor.conf", None, "info", None
+        )
+        server.security_key = "ACME-SEC"
 
-def alpha_of(image):
-    return image.convert("RGBA").getchannel("A")
+        return Context(server, cfg, importer)
 
+    @gen_test
+    async def test_resized_sticker_gif_has_transparent_corners(self):
+        response = await self.async_fetch("/unsafe/240x160/sticker.gif")
 
-def count_transparent(alpha):
-    return sum(1 for value in alpha.getdata() if value == 0)
+        assert response.code == 200
+        assert response.headers["Content-Type"] == "image/gif"
 
+        image = Image.open(BytesIO(response.body))
+        assert image.size == (240, 160)
+        assert "transparency" in image.info
 
-def test_source_has_transparency():
-    source = Image.open(BytesIO(load_source()))
-    assert "transparency" in source.info
-    assert count_transparent(alpha_of(source)) > 0
-
-
-def test_resized_gif_carries_a_transparency_index():
-    result = resize_to_gif()
-    assert result.format == "GIF"
-    assert result.size == SIZE
-    assert "transparency" in result.info
-
-
-def test_resized_gif_keeps_transparent_pixels_transparent():
-    source = Image.open(BytesIO(load_source()))
-    expected = alpha_of(source).resize(SIZE, Image.Resampling.NEAREST)
-    result = alpha_of(resize_to_gif())
-
-    expected_count = count_transparent(expected)
-    assert expected_count > 0
-    assert count_transparent(result) >= expected_count * 0.9
-    assert result.getpixel((0, 0)) == expected.getpixel((0, 0)) == 0
-    assert result.getpixel((SIZE[0] // 2, SIZE[1] // 2)) == 255
+        rgba = image.convert("RGBA")
+        width, height = rgba.size
+        corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
+        for corner in corners:
+            assert rgba.getpixel(corner)[3] == 0, f"corner {corner} is opaque"
+        assert rgba.getpixel((width // 2, height // 2))[3] == 255
